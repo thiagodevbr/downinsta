@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>IG Downloader (seus próprios vídeos)</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Inter,
+          Arial, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      .card {
+        width: min(620px, 92vw);
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 14px;
+      }
+      p.hint {
+        margin: 0 0 16px;
+        opacity: 0.8;
+        font-size: 14px;
+      }
+      form {
+        display: flex;
+        gap: 10px;
+      }
+      input[type="url"] {
+        flex: 1;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        background: #0b1220;
+        color: #e2e8f0;
+        outline: none;
+      }
+      button {
+        padding: 12px 16px;
+        border-radius: 10px;
+        border: 0;
+        cursor: pointer;
+        font-weight: 600;
+        background: #22c55e;
+        color: #052e12;
+      }
+      button:hover {
+        filter: brightness(1.05);
+      }
+      .ex {
+        margin-top: 10px;
+        font-size: 12px;
+        opacity: 0.75;
+      }
+      .ex a {
+        color: #93c5fd;
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Baixar vídeo do seu post do Instagram</h1>
+      <p class="hint">
+        Cole a URL pública do seu <strong>Reel/Post</strong> (do seu próprio
+        perfil) e clique em Baixar.
+      </p>
+
+      <form
+        method="GET"
+        action="/download"
+        onsubmit="return handleSubmit(event)"
+      >
+        <input
+          id="url"
+          name="url"
+          type="url"
+          placeholder="https://www.instagram.com/reel/SEU_CODE/"
+          required
+        />
+        <button type="submit">Baixar</button>
+      </form>
+      <div class="ex">
+        Ex.: <code>https://www.instagram.com/reel/DNMDHyVRhm9/</code>
+      </div>
+      <p class="ex">
+        Dica: se abrir uma nova aba com o MP4, use “Salvar como…”.
+      </p>
+    </div>
+
+    <script>
+      function handleSubmit(e) {
+        // deixa o GET normal acontecer (abre download em nova aba) se o usuário usar Ctrl/⌘+Enter
+        if (e.submitter && e.submitter.dataset.inline === "1") return true;
+
+        // força abrir em nova aba para facilitar o download
+        e.preventDefault();
+        const url = document.getElementById("url").value.trim();
+        if (!url) return;
+        const target = `/download?url=${encodeURIComponent(url)}`;
+        window.open(target, "_blank");
+        return false;
+      }
+    </script>
+  </body>
+</html>
