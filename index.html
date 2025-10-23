@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>download insta</title>
+    <title>IG Downloader (seus próprios vídeos)</title>
     <style>
       html,
       body {
@@ -74,7 +74,7 @@
   </head>
   <body>
     <div class="card">
-      <h1>Baixar vídeo</h1>
+      <h1>Baixar vídeo do seu post do Instagram</h1>
       <p class="hint">
         Cole a URL pública do seu <strong>Reel/Post do Instagram</strong> ou um
         link <strong>YouTube</strong> (seu conteúdo) e clique em Baixar.
@@ -95,7 +95,7 @@
         <button type="submit">Baixar</button>
       </form>
       <div class="ex">
-        Ex.: <code>https://www.instagram.com/reel/abcdefghij/</code>
+        Ex.: <code>https://www.instagram.com/reel/DNMDHyVRhm9/</code>
       </div>
       <p class="ex">
         Dica: se abrir uma nova aba com o MP4, use “Salvar como…”.
@@ -103,38 +103,15 @@
     </div>
 
     <script>
-      // function handleSubmit(e) {
-      //   // deixa o GET normal acontecer (abre download em nova aba) se o usuário usar Ctrl/⌘+Enter
-      //   if (e.submitter && e.submitter.dataset.inline === "1") return true;
-
-      //   // força abrir em nova aba para facilitar o download
-      //   e.preventDefault();
-      //   const url = document.getElementById("url").value.trim();
-      //   if (!url) return;
-      //   const target = `/download?url=${encodeURIComponent(url)}`;
-      //   window.open(target, "_blank");
-      //   return false;
-      // }
-
-      function isYoutube(url) {
-        try {
-          const u = new URL(url);
-          return (
-            /(^|\.)youtube\.com$/.test(u.hostname) ||
-            /(^|\.)youtu\.be$/.test(u.hostname)
-          );
-        } catch {
-          return false;
-        }
-      }
-
       function handleSubmit(e) {
+        // deixa o GET normal acontecer (abre download em nova aba) se o usuário usar Ctrl/⌘+Enter
+        if (e.submitter && e.submitter.dataset.inline === "1") return true;
+
+        // força abrir em nova aba para facilitar o download
         e.preventDefault();
         const url = document.getElementById("url").value.trim();
-        if (!url) return false;
-
-        const endpoint = isYoutube(url) ? "/download-youtube" : "/download";
-        const target = `${endpoint}?url=${encodeURIComponent(url)}`;
+        if (!url) return;
+        const target = `/download?url=${encodeURIComponent(url)}`;
         window.open(target, "_blank");
         return false;
       }

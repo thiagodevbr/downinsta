@@ -6,9 +6,12 @@
     "start": "node server.mjs"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "axios": "^1.7.0",
     "express": "^4.19.2",
     "jsdom": "^24.0.0",
-    "open": "^10.2.0"
+    "open": "^10.2.0",
+    "play-dl": "^1.9.7",
+    "ytdl-core": "^4.11.5"
   }
 }
