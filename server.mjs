@@ -1,9 +1,9 @@
+// server.mjs — Render.com: IG (legacy headers) + YouTube (yt-dlp)
 import express from "express";
 import axios from "axios";
 import { JSDOM } from "jsdom";
 import path from "path";
 import { fileURLToPath } from "url";
-import open from "open";
 import fs from "fs";
 import { spawn } from "child_process";
 
@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
-/* ---------- Logs de segurança ---------- */
+/* ----------------- logs ----------------- */
 process.on("unhandledRejection", (err) =>
   console.error("unhandledRejection:", err)
 );
@@ -21,8 +21,8 @@ process.on("uncaughtException", (err) =>
   console.error("uncaughtException:", err)
 );
 
-/* ---------- Headers tipo navegador ---------- */
-const HEADERS = {
+/* ----------------- IG: headers (sua versão que funciona) ----------------- */
+const IG_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -30,16 +30,24 @@ const HEADERS = {
   "Cache-Control": "no-cache",
   Pragma: "no-cache",
   Referer: "https://www.instagram.com/",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "same-origin",
+  "Sec-Fetch-User": "?1",
+  "sec-ch-ua":
+    '"Chromium";v="122", "Not(A:Brand";v="8", "Google Chrome";v="122"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
 };
 
-/* ---------- Static & health ---------- */
+/* ----------------- static & health ----------------- */
 app.use(express.static(path.join(__dirname, "public")));
 app.get("/health", (_req, res) => res.send("ok"));
 app.get("/", (_req, res) =>
   res.sendFile(path.join(__dirname, "public", "index.html"))
 );
 
-/* ---------- Download genérico ---------- */
+/* ----------------- Download genérico (IG por padrão; YT redireciona) ----------------- */
 app.get("/download", async (req, res) => {
   try {
     const postUrl = req.query.url;
@@ -59,7 +67,7 @@ app.get("/download", async (req, res) => {
       return res
         .status(404)
         .send(
-          "Não encontrei o vídeo (post privado, sem metatags ou layout mudou)."
+          "Não encontrei o vídeo (post privado, sem metatags de mídia, ou layout mudou). Use /debug para investigar."
         );
     }
 
@@ -68,7 +76,7 @@ app.get("/download", async (req, res) => {
 
     const r = await axios.get(videoUrl, {
       responseType: "stream",
-      headers: HEADERS,
+      headers: IG_HEADERS,
       timeout: 60000,
       maxRedirects: 5,
       validateStatus: () => true,
@@ -78,11 +86,13 @@ app.get("/download", async (req, res) => {
     r.data.pipe(res);
   } catch (err) {
     console.error("Erro /download:", err?.message || err);
-    res.status(500).send(err?.message || "Erro ao baixar");
+    res
+      .status(err?.response?.status || 500)
+      .send(err?.response?.statusText || err?.message || "Erro ao baixar");
   }
 });
 
-/* ---------- Download YouTube ---------- */
+/* ----------------- Download YouTube (yt-dlp, com título) ----------------- */
 app.get("/download-youtube", async (req, res) => {
   try {
     const ytUrl = req.query.url;
@@ -93,13 +103,10 @@ app.get("/download-youtube", async (req, res) => {
 
     await cleanupYtdlDumps(__dirname);
 
-    // Busca título real do vídeo
     const title = await getYoutubeTitle(ytUrl);
     const filename = sanitizeFilename(title || "youtube_video") + ".mp4";
 
-    return downloadWithYtDlp(ytUrl, res, filename, {
-      progressiveOnly: true,
-    });
+    return downloadWithYtDlp(ytUrl, res, filename, { progressiveOnly: true }); // 1080p+: use false (requer ffmpeg)
   } catch (err) {
     console.error("Erro /download-youtube:", err?.message || err);
     res.status(500).send(err?.message || "Erro ao processar vídeo do YouTube.");
@@ -108,7 +115,7 @@ app.get("/download-youtube", async (req, res) => {
   }
 });
 
-/* ---------- Debug Instagram ---------- */
+/* ----------------- Debug IG ----------------- */
 app.get("/debug", async (req, res) => {
   try {
     const postUrl = req.query.url;
@@ -126,38 +133,22 @@ app.get("/debug", async (req, res) => {
       const html = await fetchHtml(url);
       const info = probeHtml(html);
       out.push({ url, ...info });
-      if (info.videoUrl) break;
+      if (info.videoUrl) break; // achou, pode parar
     }
 
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.end(JSON.stringify(out, null, 2));
   } catch (err) {
-    console.error("Erro /debug:", err?.message || err);
     res.status(500).send(err?.message || "Erro no debug");
   }
 });
 
-/* ---------- Listen ---------- */
-const server = app.listen(PORT, "0.0.0.0", () => {
-  const url = `http://localhost:${PORT}`;
-  console.log(`Downloader rodando em ${url}`);
-  try {
-    void open(url);
-  } catch {}
+/* ----------------- listen ----------------- */
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server on :${PORT}`);
 });
 
-/* ================= helpers ================= */
-
-function isYoutubeUrl(u) {
-  try {
-    const { hostname } = new URL(u);
-    return (
-      /(^|\.)youtube\.com$/.test(hostname) || /(^|\.)youtu\.be$/.test(hostname)
-    );
-  } catch {
-    return false;
-  }
-}
+/* ================= IG helpers (sua versão) ================= */
 
 function normalizePostUrl(url) {
   try {
@@ -167,7 +158,6 @@ function normalizePostUrl(url) {
     return url;
   }
 }
-
 function defaultFileName(url) {
   try {
     const parts = new URL(url).pathname.split("/").filter(Boolean);
@@ -178,10 +168,9 @@ function defaultFileName(url) {
     return "instagram_video";
   }
 }
-
 async function fetchHtml(url) {
   const r = await axios.get(url, {
-    headers: HEADERS,
+    headers: IG_HEADERS,
     timeout: 60000,
     maxRedirects: 5,
     validateStatus: () => true,
@@ -190,7 +179,6 @@ async function fetchHtml(url) {
     throw new Error(`Falha ao abrir ${url} (status ${r.status})`);
   return r.data;
 }
-
 async function findVideoUrl(postUrl) {
   const candidates = [
     postUrl,
@@ -204,10 +192,10 @@ async function findVideoUrl(postUrl) {
   }
   return null;
 }
-
 function probeHtml(html) {
   const dom = new JSDOM(html);
   const doc = dom.window.document;
+
   const metas = {
     ogVideo:
       doc.querySelector('meta[property="og:video"], meta[name="og:video"]')
@@ -218,19 +206,24 @@ function probeHtml(html) {
     twitterStream:
       doc.querySelector('meta[name="twitter:player:stream"]')?.content || null,
   };
+
   const jsonLd = [...doc.querySelectorAll('script[type="application/ld+json"]')]
     .map((n) => n.textContent?.trim())
     .filter(Boolean)
     .slice(0, 3);
+
   const scripts = [...doc.querySelectorAll("script")]
     .map((n) => n.textContent?.trim())
     .filter(Boolean);
+
   const textSample = (s) =>
     s ? (s.length > 1000 ? s.slice(0, 1000) + "..." : s) : null;
+
   const videoUrl = extractFromHtml(html);
   const bigJson = scripts.find((t) =>
     /video_versions|playable_url|video_url|dash_manifest/.test(t)
   );
+
   return {
     metas,
     jsonLdFirst: textSample(jsonLd[0]),
@@ -238,23 +231,29 @@ function probeHtml(html) {
     videoUrl: videoUrl || null,
   };
 }
-
 function extractFromHtml(html) {
   const dom = new JSDOM(html);
   const doc = dom.window.document;
 
+  // a) og:video
   let tag = doc.querySelector(
     'meta[property="og:video"], meta[name="og:video"]'
   );
   if (tag?.content) return tag.content;
+
+  // b) og:video:secure_url
   tag = doc.querySelector('meta[property="og:video:secure_url"]');
   if (tag?.content) return tag.content;
+
+  // c) twitter:player:stream
   tag = doc.querySelector('meta[name="twitter:player:stream"]');
   if (tag?.content) return tag.content;
 
+  // d) <video src="...">
   const vtag = doc.querySelector("video");
   if (vtag?.src) return vtag.src;
 
+  // e) JSON-LD contentUrl
   const ldBlocks = [
     ...doc.querySelectorAll('script[type="application/ld+json"]'),
   ];
@@ -271,6 +270,7 @@ function extractFromHtml(html) {
     } catch {}
   }
 
+  // f) busca em scripts inline
   const rxList = [
     /"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"/,
     /"playable_url_quality_hd"\s*:\s*"([^"]+)"/,
@@ -289,6 +289,7 @@ function extractFromHtml(html) {
     }
   }
 
+  // g) dash_manifest (último recurso)
   const dash = html.match(/"dash_manifest"\s*:\s*"([^"]+)"/);
   if (dash) {
     try {
@@ -300,9 +301,8 @@ function extractFromHtml(html) {
   return null;
 }
 
-/* ---------- yt-dlp helpers ---------- */
+/* ================= YT helpers (yt-dlp) ================= */
 
-// Pega o título real do vídeo
 async function getYoutubeTitle(url) {
   return new Promise((resolve) => {
     try {
@@ -311,15 +311,15 @@ async function getYoutubeTitle(url) {
       child.stdout.on("data", (chunk) => {
         title += chunk.toString();
       });
-      child.on("close", (code) => resolve(code === 0 ? title.trim() : null));
+      child.on("close", (code) =>
+        resolve(code === 0 && title.trim() ? title.trim() : null)
+      );
       child.on("error", () => resolve(null));
     } catch {
       resolve(null);
     }
   });
 }
-
-// Baixa com yt-dlp
 function downloadWithYtDlp(
   url,
   res,
@@ -340,7 +340,7 @@ function downloadWithYtDlp(
     formatSelector,
     "--no-playlist",
     "--user-agent",
-    HEADERS["User-Agent"],
+    IG_HEADERS["User-Agent"], // reaproveita um UA de browser
     "-o",
     "-",
   ];
@@ -375,12 +375,19 @@ function downloadWithYtDlp(
       console.error(`Tentativa com ${cmd} falhou:`, e.message || e);
     }
   }
-
-  if (!started && !res.headersSent) {
+  if (!started && !res.headersSent)
     res.status(500).send("yt-dlp não encontrado no sistema.");
+}
+function isYoutubeUrl(u) {
+  try {
+    const { hostname } = new URL(u);
+    return (
+      /(^|\.)youtube\.com$/.test(hostname) || /(^|\.)youtu\.be$/.test(hostname)
+    );
+  } catch {
+    return false;
   }
 }
-
 function sanitizeFilename(name = "video") {
   return (
     name
@@ -390,7 +397,7 @@ function sanitizeFilename(name = "video") {
   );
 }
 
-// Remove dumps automáticos
+// remove dumps se alguma lib criar
 async function cleanupYtdlDumps(baseDir) {
   try {
     const files = await fs.promises.readdir(baseDir);

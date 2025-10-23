@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ig-yt-downloader
+    runtime: docker
+    plan: free
+    envVars:
+      - key: IG_MODE
+        value: resilient
+      # Se precisar autenticar no IG para seus próprios vídeos:
+      # - key: IG_COOKIE
+      #   value: sessionid=...; ds_user_id=...; csrftoken=...
+    healthCheckPath: /health
