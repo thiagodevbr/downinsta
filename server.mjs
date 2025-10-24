@@ -1,10 +1,11 @@
-// server.mjs — Render.com: IG (legacy headers) + YouTube (yt-dlp)
+// server.mjs — IG (legacy) + YouTube (yt-dlp com tmp + fallback)
 import express from "express";
 import axios from "axios";
 import { JSDOM } from "jsdom";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import os from "os";
 import { spawn } from "child_process";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,7 +14,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
-/* ----------------- logs ----------------- */
+/* ----------------- Logs básicos ----------------- */
 process.on("unhandledRejection", (err) =>
   console.error("unhandledRejection:", err)
 );
@@ -21,7 +22,7 @@ process.on("uncaughtException", (err) =>
   console.error("uncaughtException:", err)
 );
 
-/* ----------------- IG: headers (sua versão que funciona) ----------------- */
+/* ----------------- IG: headers (versão que funciona) ----------------- */
 const IG_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -40,14 +41,14 @@ const IG_HEADERS = {
   "sec-ch-ua-platform": '"Windows"',
 };
 
-/* ----------------- static & health ----------------- */
+/* ----------------- Static & Health ----------------- */
 app.use(express.static(path.join(__dirname, "public")));
 app.get("/health", (_req, res) => res.send("ok"));
 app.get("/", (_req, res) =>
   res.sendFile(path.join(__dirname, "public", "index.html"))
 );
 
-/* ----------------- Download genérico (IG por padrão; YT redireciona) ----------------- */
+/* ----------------- Download genérico (IG por padrão) ----------------- */
 app.get("/download", async (req, res) => {
   try {
     const postUrl = req.query.url;
@@ -73,6 +74,7 @@ app.get("/download", async (req, res) => {
 
     const filename = `${defaultFileName(normalized)}.mp4`;
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Type", "video/mp4");
 
     const r = await axios.get(videoUrl, {
       responseType: "stream",
@@ -92,7 +94,8 @@ app.get("/download", async (req, res) => {
   }
 });
 
-/* ----------------- Download YouTube (yt-dlp, com título) ----------------- */
+/* ----------------- Download YouTube (tmp + merge; fallback progressivo) ----------------- */
+// Download YouTube (tmp + merge; fallback progressivo) usando o caminho final do próprio yt-dlp
 app.get("/download-youtube", async (req, res) => {
   try {
     const ytUrl = req.query.url;
@@ -101,17 +104,73 @@ app.get("/download-youtube", async (req, res) => {
         .status(400)
         .send("Use /download-youtube?url=<link do YouTube>");
 
-    await cleanupYtdlDumps(__dirname);
+    const meta = await getYoutubeMeta(ytUrl);
+    const id = meta?.id || String(Date.now());
+    const title = sanitizeFilename(meta?.title || "youtube_video");
 
-    const title = await getYoutubeTitle(ytUrl);
-    const filename = sanitizeFilename(title || "youtube_video") + ".mp4";
+    const outBase = path.join(os.tmpdir(), `yt-${id}`);
 
-    return downloadWithYtDlp(ytUrl, res, filename, { progressiveOnly: true }); // 1080p+: use false (requer ffmpeg)
+    const result = await downloadWithYtDlpToFile(ytUrl, outBase); // { ok, filepath, stderr }
+
+    // Se o yt-dlp reportou o caminho final, usa ele
+    let finalPath =
+      result.filepath && fs.existsSync(result.filepath)
+        ? result.filepath
+        : null;
+
+    // Último recurso: procura qualquer arquivo que comece com outBase (exceto .part)
+    if (!finalPath) {
+      const dir = path.dirname(outBase);
+      const baseName = path.basename(outBase);
+      const files = fs
+        .readdirSync(dir)
+        .filter((f) => f.startsWith(baseName) && !f.endsWith(".part"))
+        .map((f) => path.join(dir, f));
+      files.sort(
+        (a, b) => (fs.statSync(b).size || 0) - (fs.statSync(a).size || 0)
+      );
+      if (files[0] && fs.statSync(files[0]).size > 0) finalPath = files[0];
+    }
+
+    if (!finalPath) {
+      console.error("yt-dlp stderr:", result.stderr || "(vazio)");
+      return res
+        .status(500)
+        .send("Falha ao baixar/mesclar vídeo (arquivo não encontrado).");
+    }
+
+    // envia com nome bonito (força .mp4 pra baixar padronizado)
+    res.setHeader("Content-Disposition", `attachment; filename="${title}.mp4"`);
+    res.setHeader("Content-Type", "video/mp4");
+
+    const read = fs.createReadStream(finalPath);
+    read.on("error", (e) => {
+      console.error("Erro lendo arquivo:", e);
+      if (!res.headersSent) res.status(500).send("Erro ao ler arquivo.");
+      try {
+        res.end();
+      } catch {}
+    });
+    read.pipe(res);
+
+    const cleanup = async () => {
+      // remove todos os arquivos relacionados a esse download
+      const dir = path.dirname(outBase);
+      const baseName = path.basename(outBase);
+      fs.readdir(dir, (err, list) => {
+        if (err) return;
+        list
+          .filter((f) => f.startsWith(baseName))
+          .forEach((f) => {
+            fs.promises.unlink(path.join(dir, f)).catch(() => {});
+          });
+      });
+    };
+    res.on("finish", cleanup);
+    res.on("close", cleanup);
   } catch (err) {
     console.error("Erro /download-youtube:", err?.message || err);
     res.status(500).send(err?.message || "Erro ao processar vídeo do YouTube.");
-  } finally {
-    await cleanupYtdlDumps(__dirname);
   }
 });
 
@@ -143,12 +202,22 @@ app.get("/debug", async (req, res) => {
   }
 });
 
-/* ----------------- listen ----------------- */
+/* ----------------- Listen ----------------- */
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server on :${PORT}`);
 });
 
-/* ================= IG helpers (sua versão) ================= */
+/* ================= IG helpers (legado) ================= */
+// coloque no topo das helpers do YouTube
+const YTDLP_COMMON = [
+  "--force-ipv4",
+  "--geo-bypass",
+  "--no-check-certificates",
+  "--extractor-args",
+  "youtube:player_client=android,player_skip=webpage",
+  // alternativas possíveis se ainda falhar:
+  // "--extractor-args", "youtube:player_client=ios,player_skip=webpage"
+];
 
 function normalizePostUrl(url) {
   try {
@@ -270,7 +339,7 @@ function extractFromHtml(html) {
     } catch {}
   }
 
-  // f) busca em scripts inline
+  // f) Busca em scripts inline
   const rxList = [
     /"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"/,
     /"playable_url_quality_hd"\s*:\s*"([^"]+)"/,
@@ -301,83 +370,121 @@ function extractFromHtml(html) {
   return null;
 }
 
-/* ================= YT helpers (yt-dlp) ================= */
+/* ================= YouTube helpers ================= */
 
-async function getYoutubeTitle(url) {
+// Pega id + título rapidamente
+function getYoutubeMeta(url) {
   return new Promise((resolve) => {
     try {
-      const child = spawn("yt-dlp", ["--no-warnings", "--print", "title", url]);
-      let title = "";
-      child.stdout.on("data", (chunk) => {
-        title += chunk.toString();
+      const args = [
+        ...YTDLP_COMMON,
+        "--no-warnings",
+        "--print",
+        "%(id)s\t%(title)s",
+        url,
+      ];
+      const child = spawn("yt-dlp", args, {
+        stdio: ["ignore", "pipe", "pipe"],
       });
-      child.on("close", (code) =>
-        resolve(code === 0 && title.trim() ? title.trim() : null)
-      );
+      let out = "",
+        err = "";
+      child.stdout.on("data", (c) => (out += c.toString()));
+      child.stderr.on("data", (d) => process.stderr.write(`[yt-dlp] ${d}`));
+      child.on("close", (code) => {
+        if (code === 0 && out.trim()) {
+          const [id, title] = out.trim().split("\t");
+          resolve({ id, title });
+        } else resolve(null);
+      });
       child.on("error", () => resolve(null));
     } catch {
       resolve(null);
     }
   });
 }
-function downloadWithYtDlp(
-  url,
-  res,
-  filename = "video.mp4",
-  opts = { progressiveOnly: true }
-) {
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="${sanitizeFilename(filename)}"`
-  );
 
-  const formatSelector = opts.progressiveOnly
-    ? "best[ext=mp4][acodec!=none]/best[acodec!=none]/best"
-    : "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best";
+// Baixa para arquivo; tenta MERGE (ffmpeg). Se falhar, cai para PROGRESSIVO (sem ffmpeg).
+// Baixa para arquivo e retorna o caminho FINAL impresso pelo yt-dlp.
+// Tenta MERGE (ffmpeg) com remux em mp4; se falhar, cai para PROGRESSIVO.
+// Usa --print after_move:filepath (ou filepath) para capturar o destino final.
+function downloadWithYtDlpToFile(url, outBaseNoExt) {
+  return new Promise((resolve) => {
+    let stderrBuf = "",
+      stdoutBuf = "";
 
-  const baseArgs = [
-    "-f",
-    formatSelector,
-    "--no-playlist",
-    "--user-agent",
-    IG_HEADERS["User-Agent"], // reaproveita um UA de browser
-    "-o",
-    "-",
-  ];
-
-  const candidates = ["yt-dlp", "yt-dlp.exe", "python", "py"];
-  const build = (cmd) =>
-    cmd === "python" || cmd === "py"
-      ? [cmd, ["-m", "yt_dlp", ...baseArgs, url]]
-      : [cmd, [...baseArgs, url]];
-
-  let started = false;
-  for (const cmd of candidates) {
-    try {
-      const [bin, args] = build(cmd);
-      const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
-
-      child.stdout.pipe(res);
-      child.stderr.on("data", (d) => process.stderr.write(`[yt-dlp] ${d}`));
-      child.on("error", (e) => {
-        console.error(`Falha ao executar ${bin}:`, e.message || e);
-        if (!res.headersSent)
-          res.status(500).send("yt-dlp não encontrado / falhou ao iniciar.");
-      });
-      child.on("close", (code) => {
-        if (code !== 0 && !res.headersSent)
-          res.status(500).send(`yt-dlp saiu com código ${code}`);
+    const run = (args) =>
+      new Promise((res) => {
+        const child = spawn("yt-dlp", [...args, url], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        child.stdout.on("data", (d) => (stdoutBuf += d.toString()));
+        child.stderr.on("data", (d) => {
+          stderrBuf += d.toString();
+          process.stderr.write(`[yt-dlp] ${d}`);
+        });
+        child.on("error", (e) => res({ code: 1, error: e }));
+        child.on("close", (code) => res({ code }));
       });
 
-      started = true;
-      break;
-    } catch (e) {
-      console.error(`Tentativa com ${cmd} falhou:`, e.message || e);
-    }
-  }
-  if (!started && !res.headersSent)
-    res.status(500).send("yt-dlp não encontrado no sistema.");
+    (async () => {
+      // A) melhor qualidade com merge (mp4) — requer ffmpeg
+      stdoutBuf = "";
+      stderrBuf = "";
+      let argsMerge = [
+        ...YTDLP_COMMON,
+        "-f",
+        "bv*+ba/best",
+        "--no-playlist",
+        "--merge-output-format",
+        "mp4",
+        "--restrict-filenames",
+        "-o",
+        `${outBaseNoExt}.%(ext)s`,
+        "--user-agent",
+        "Mozilla/5.0",
+        "--print",
+        "after_move:filepath",
+        "--print",
+        "filepath",
+      ];
+      let r = await run(argsMerge);
+
+      // B) fallback progressivo (sem merge)
+      if (r.code !== 0) {
+        stdoutBuf = ""; // só capturar do fallback
+        let argsProg = [
+          ...YTDLP_COMMON,
+          "-f",
+          "best[ext=mp4][acodec!=none]/best[acodec!=none]/best",
+          "--no-playlist",
+          "--restrict-filenames",
+          "-o",
+          `${outBaseNoExt}.%(ext)s`,
+          "--user-agent",
+          "Mozilla/5.0",
+          "--print",
+          "after_move:filepath",
+          "--print",
+          "filepath",
+        ];
+        r = await run(argsProg);
+      }
+
+      const lines = stdoutBuf
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const filepath = lines.length ? lines[lines.length - 1] : null;
+
+      resolve({
+        ok: r.code === 0,
+        filepath: filepath && fs.existsSync(filepath) ? filepath : null,
+        stderr: stderrBuf,
+      });
+    })();
+  });
 }
+
 function isYoutubeUrl(u) {
   try {
     const { hostname } = new URL(u);
@@ -388,6 +495,7 @@ function isYoutubeUrl(u) {
     return false;
   }
 }
+
 function sanitizeFilename(name = "video") {
   return (
     name
@@ -395,16 +503,4 @@ function sanitizeFilename(name = "video") {
       .slice(0, 150)
       .trim() || "video"
   );
-}
-
-// remove dumps se alguma lib criar
-async function cleanupYtdlDumps(baseDir) {
-  try {
-    const files = await fs.promises.readdir(baseDir);
-    await Promise.all(
-      files
-        .filter((f) => f.endsWith("-player-script.js"))
-        .map((f) => fs.promises.unlink(path.join(baseDir, f)).catch(() => {}))
-    );
-  } catch {}
 }

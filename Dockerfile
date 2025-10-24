@@ -1,9 +1,12 @@
 # Dockerfile
 FROM node:20-bookworm
 
-# Instala yt-dlp e ffmpeg pelos pacotes Debian
+# yt-dlp (última) + ffmpeg
 RUN apt-get update \
- && apt-get install -y --no-install-recommends yt-dlp ffmpeg \
+ && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg \
+ && python3 -m venv /venv \
+ && /venv/bin/pip install --upgrade pip yt-dlp \
+ && ln -s /venv/bin/yt-dlp /usr/local/bin/yt-dlp \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
